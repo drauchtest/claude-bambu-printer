@@ -130,11 +130,13 @@ def cmd_setup(args):
         # calls raise_for_status() before reading that body, so the only thing
         # reaching us is "400 Client Error". Without 400 and "incorrect account"
         # in this filter, the most common setup mistake is reported as a network
-        # problem. Note that an account created through Google or Apple sign-in
+        # problem. Match the full "400 client error": a bare "400" also hits the
+        # memory address in a urllib3 connection error, turning a network outage
+        # into "check your password". Note that an account created through Google or Apple sign-in
         # has no password at all and lands here too.
         if (
             "401" in err_str
-            or "400" in err_str
+            or "400 client error" in err_str
             or "unauthorized" in err_str
             or "invalid" in err_str
             or "incorrect account" in err_str

@@ -379,10 +379,11 @@ def cmd_status(args):
     def on_message(dev_id, data):
         nonlocal status_data
         p = data.get("print", {})
-        # Require gcode_state: the printer also sends follow-up reports with a
-        # partial `print` block, and filling the whole thing from those would
-        # report UNKNOWN with zero layers and zero degrees as a real status --
-        # and end the wait loop on it.
+        # Require gcode_state. This is defensive and not observed on this
+        # printer: every follow-up report measured here had no `print` section
+        # at all. But a report with `print` and without gcode_state would be
+        # published as a real status -- UNKNOWN, zero layers, zero degrees --
+        # and would end the wait loop on it.
         if p and p.get("gcode_state") is not None:
             status_data = {
                 "state": p["gcode_state"],
@@ -526,8 +527,13 @@ def cmd_filaments(args):
     def on_message(dev_id, data):
         nonlocal ams_data
         p = data.get("print", {})
-        if p:
-            ams_data = p.get("ams", {})
+        # Require the ams key, the same way cmd_status requires gcode_state. A
+        # report carrying `print` without `ams` would otherwise overwrite good
+        # slot data with {} and the run would claim "No filaments detected"
+        # while there is filament loaded. wait_for_report sends several pushalls,
+        # so there is more than one report to survive.
+        if p and p.get("ams") is not None:
+            ams_data = p["ams"]
 
     eprint("[filaments] Connecting to printer via MQTT...")
     try:
