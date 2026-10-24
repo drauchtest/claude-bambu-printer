@@ -16,6 +16,7 @@ Loads config from ~/.claude/bambu-config.json (created by printer_setup.py).
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -108,23 +109,59 @@ def is_sliced_3mf(filepath: str) -> bool:
         return False
 
 
-def wait_until_connected(mqtt_client, timeout: float = 15.0) -> None:
-    """Block until the MQTT client reports a live connection.
+class MQTTNotAuthorized(Exception):
+    """The broker rejected our credentials. Message says "not authorized" on
+    purpose: the caller's error handling greps for "auth" to emit the
+    re-authentication hint instead of a generic connection failure."""
 
-    MQTTClient.connect(blocking=False) only kicks off the TCP/TLS handshake in a
-    background thread; it returns before the broker has acknowledged anything.
-    Publishing in that window makes MQTTClient.publish() raise
-    MQTTError("Not connected to broker"), which is reported to the user as a
-    connection failure even though the connection is about to succeed.
+
+def connect_and_wait(mqtt_client, timeout: float = 15.0):
+    """Connect and block until the broker has acknowledged us.
+
+    MQTTClient.connect(blocking=False) only kicks off the TCP/TLS handshake on a
+    background thread and returns before the broker has answered. Publishing in
+    that window makes MQTTClient.publish() raise MQTTError("Not connected to
+    broker"), reported to the user as a connection failure on a connection that
+    was about to succeed.
+
+    MQTTClient does not keep the CONNACK reason code, so wrap its callback to
+    record it. Without that, an expired token -- the daily case, the token lives
+    about 24h -- just times out after `timeout` seconds and reports the wrong
+    cause, while paho silently retries "not authorized" in the background.
     """
+    inner = mqtt_client._on_connect
+
+    def record(client, userdata, flags, rc, properties=None):
+        mqtt_client._last_connect_rc = rc
+        return inner(client, userdata, flags, rc, properties)
+
+    mqtt_client._on_connect = record
+    mqtt_client._last_connect_rc = None
+
+    mqtt_client.connect(blocking=False)
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if getattr(mqtt_client, "connected", False):
             return
+        rc = getattr(mqtt_client, "_last_connect_rc", None)
+        if rc is not None and getattr(rc, "value", rc) != 0:
+            raise MQTTNotAuthorized(f"broker refused the connection: {rc}")
         time.sleep(0.1)
     raise TimeoutError(
         f"MQTT broker did not acknowledge the connection within {timeout:.0f}s"
     )
+
+
+def quiet_disconnect(mqtt_client):
+    """Disconnect without the library logging a clean shutdown as a warning.
+
+    MQTTClient._on_disconnect warns on any non-zero reason code, including the
+    one paho reports for a disconnect we asked for, so a successful run ends on
+    "Unexpected disconnect" and looks like a fault.
+    """
+    logging.getLogger("bambulab").setLevel(logging.ERROR)
+    mqtt_client.disconnect()
 
 
 def cmd_send(args):
@@ -337,17 +374,19 @@ def cmd_status(args):
             device_id=device_id,
             on_message=on_message,
         )
-        mqtt.connect(blocking=False)
-        wait_until_connected(mqtt)
-        mqtt.request_full_status()
-
-        # Wait up to 5 seconds for a response
-        for _ in range(10):
+        connect_and_wait(mqtt)
+        # Re-send pushall while waiting. MQTTClient._on_connect flips `connected`
+        # to True and only subscribes afterwards, so the first request can leave
+        # before our subscription is live -- the printer answers into the void and
+        # the run reports an unreachable printer.
+        for attempt in range(10):
+            if attempt % 3 == 0:
+                mqtt.request_full_status()
             time.sleep(0.5)
             if status_data:
                 break
 
-        mqtt.disconnect()
+        quiet_disconnect(mqtt)
     except Exception as e:
         err_str = str(e).lower()
         if "401" in err_str or "unauthorized" in err_str or "auth" in err_str:
@@ -402,15 +441,13 @@ def _mqtt_command(action: str, method_name: str):
             device_id=device_id,
             on_message=lambda *a: None,
         )
-        mqtt.connect(blocking=False)
-        wait_until_connected(mqtt)
-        time.sleep(1)  # Wait for connection
+        connect_and_wait(mqtt)
 
         # Call the appropriate method
         getattr(mqtt, method_name)()
         eprint(f"[{action}] Command sent.")
         time.sleep(0.5)  # Brief wait for acknowledgment
-        mqtt.disconnect()
+        quiet_disconnect(mqtt)
 
         output_json({
             "status": "ok",
@@ -467,8 +504,7 @@ def cmd_filaments(args):
             device_id=device_id,
             on_message=on_message,
         )
-        mqtt.connect(blocking=False)
-        wait_until_connected(mqtt)
+        connect_and_wait(mqtt)
         mqtt.request_full_status()
 
         for _ in range(10):
@@ -476,7 +512,7 @@ def cmd_filaments(args):
             if ams_data:
                 break
 
-        mqtt.disconnect()
+        quiet_disconnect(mqtt)
     except Exception as e:
         err_str = str(e).lower()
         if "401" in err_str or "unauthorized" in err_str or "auth" in err_str:

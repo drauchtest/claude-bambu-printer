@@ -104,7 +104,13 @@ def cmd_setup(args):
     email = input("BambuLab email: ").strip()
     # getpass instead of input: the password must not be echoed to the terminal,
     # where it stays visible in the scrollback (and in any screen recording).
-    password = getpass.getpass("BambuLab password (hidden): ").strip()
+    # On Windows getpass reads the console directly and ignores piped stdin, so
+    # without this fallback a scripted run hangs forever instead of failing.
+    if sys.stdin.isatty():
+        password = getpass.getpass("BambuLab password (hidden): ").strip()
+    else:
+        eprint("[setup] stdin is not a terminal; the password will be echoed.")
+        password = input("BambuLab password: ").strip()
 
     if not email or not password:
         output_error("Email and password are required.")

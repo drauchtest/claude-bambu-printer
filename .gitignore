@@ -4,9 +4,15 @@ __pycache__/
 *.pyo
 .venv/
 
+# Secrets -- this is a public fork. `backend/.env` alone did not cover a .env in
+# the repo root, while the project docs claimed credentials were "gitignored".
+.env
+*.env
+.env.*
+!.env.example
+
 # Backend
 backend/logs/
-backend/.env
 
 # macOS
 .DS_Store
