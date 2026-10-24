@@ -11,6 +11,7 @@ Config is saved to ~/.claude/bambu-config.json with 0o600 permissions.
 """
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -101,7 +102,9 @@ def cmd_setup(args):
 
     # Step 1: Authenticate
     email = input("BambuLab email: ").strip()
-    password = input("BambuLab password: ").strip()
+    # getpass instead of input: the password must not be echoed to the terminal,
+    # where it stays visible in the scrollback (and in any screen recording).
+    password = getpass.getpass("BambuLab password (hidden): ").strip()
 
     if not email or not password:
         output_error("Email and password are required.")
