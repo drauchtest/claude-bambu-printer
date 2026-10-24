@@ -108,6 +108,25 @@ def is_sliced_3mf(filepath: str) -> bool:
         return False
 
 
+def wait_until_connected(mqtt_client, timeout: float = 15.0) -> None:
+    """Block until the MQTT client reports a live connection.
+
+    MQTTClient.connect(blocking=False) only kicks off the TCP/TLS handshake in a
+    background thread; it returns before the broker has acknowledged anything.
+    Publishing in that window makes MQTTClient.publish() raise
+    MQTTError("Not connected to broker"), which is reported to the user as a
+    connection failure even though the connection is about to succeed.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if getattr(mqtt_client, "connected", False):
+            return
+        time.sleep(0.1)
+    raise TimeoutError(
+        f"MQTT broker did not acknowledge the connection within {timeout:.0f}s"
+    )
+
+
 def cmd_send(args):
     """Send a 3MF file to the printer for cloud printing."""
     from bambulab import BambuClient
@@ -319,6 +338,7 @@ def cmd_status(args):
             on_message=on_message,
         )
         mqtt.connect(blocking=False)
+        wait_until_connected(mqtt)
         mqtt.request_full_status()
 
         # Wait up to 5 seconds for a response
@@ -383,6 +403,7 @@ def _mqtt_command(action: str, method_name: str):
             on_message=lambda *a: None,
         )
         mqtt.connect(blocking=False)
+        wait_until_connected(mqtt)
         time.sleep(1)  # Wait for connection
 
         # Call the appropriate method
@@ -447,6 +468,7 @@ def cmd_filaments(args):
             on_message=on_message,
         )
         mqtt.connect(blocking=False)
+        wait_until_connected(mqtt)
         mqtt.request_full_status()
 
         for _ in range(10):
