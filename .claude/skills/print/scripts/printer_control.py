@@ -16,7 +16,6 @@ Loads config from ~/.claude/bambu-config.json (created by printer_setup.py).
 
 import argparse
 import json
-import logging
 import os
 import subprocess
 import sys
@@ -110,9 +109,18 @@ def is_sliced_3mf(filepath: str) -> bool:
 
 
 class MQTTNotAuthorized(Exception):
-    """The broker rejected our credentials. Message says "not authorized" on
-    purpose: the caller's error handling greps for "auth" to emit the
-    re-authentication hint instead of a generic connection failure."""
+    """The broker rejected our credentials.
+
+    The message starts with "not authorized" on purpose, because the callers
+    grep the text for "auth" to decide between the re-authentication hint and a
+    generic connection failure. Do not rely on the broker's own wording: code 5
+    says "Not authorized" and matches, but code 4 says "Bad user name or
+    password" and used to fall through to the generic message.
+    """
+
+    def __init__(self, reason_code):
+        super().__init__(f"not authorized -- broker refused the connection: {reason_code}")
+        self.reason_code = reason_code
 
 
 def connect_and_wait(mqtt_client, timeout: float = 15.0):
@@ -138,6 +146,19 @@ def connect_and_wait(mqtt_client, timeout: float = 15.0):
     mqtt_client._on_connect = record
     mqtt_client._last_connect_rc = None
 
+    # Both callbacks have to be replaced before connect(), because connect()
+    # hands the bound methods to paho and never looks at them again.
+    inner_disconnect = mqtt_client._on_disconnect
+    mqtt_client._shutting_down = False
+
+    def on_disconnect(*args, **kwargs):
+        if getattr(mqtt_client, "_shutting_down", False):
+            mqtt_client.connected = False
+            return
+        return inner_disconnect(*args, **kwargs)
+
+    mqtt_client._on_disconnect = on_disconnect
+
     mqtt_client.connect(blocking=False)
 
     deadline = time.monotonic() + timeout
@@ -146,21 +167,39 @@ def connect_and_wait(mqtt_client, timeout: float = 15.0):
             return
         rc = getattr(mqtt_client, "_last_connect_rc", None)
         if rc is not None and getattr(rc, "value", rc) != 0:
-            raise MQTTNotAuthorized(f"broker refused the connection: {rc}")
+            raise MQTTNotAuthorized(rc)
         time.sleep(0.1)
     raise TimeoutError(
         f"MQTT broker did not acknowledge the connection within {timeout:.0f}s"
     )
 
 
+def wait_for_report(mqtt_client, got_data, rounds: int = 10, interval: float = 0.5):
+    """Ask for a full status report until one arrives.
+
+    Re-sending matters because MQTTClient._on_connect flips `connected` to True
+    and subscribes only afterwards, so the first pushall can leave before our
+    subscription is live -- the printer then answers into the void and the run
+    reports an unreachable printer.
+    """
+    for attempt in range(rounds):
+        if attempt % 3 == 0:
+            mqtt_client.request_full_status()
+        time.sleep(interval)
+        if got_data():
+            return
+
+
 def quiet_disconnect(mqtt_client):
     """Disconnect without the library logging a clean shutdown as a warning.
 
     MQTTClient._on_disconnect warns on any non-zero reason code, including the
-    one paho reports for a disconnect we asked for, so a successful run ends on
-    "Unexpected disconnect" and looks like a fault.
+    one paho reports for a disconnect we asked for, so a successful run ended on
+    "Unexpected disconnect" and looked like a fault. Only our own shutdown is
+    silenced -- a disconnect we did not ask for is still reported, which is why
+    this sets a flag instead of muting the callback or the whole logger.
     """
-    logging.getLogger("bambulab").setLevel(logging.ERROR)
+    mqtt_client._shutting_down = True
     mqtt_client.disconnect()
 
 
@@ -340,9 +379,13 @@ def cmd_status(args):
     def on_message(dev_id, data):
         nonlocal status_data
         p = data.get("print", {})
-        if p:
+        # Require gcode_state: the printer also sends follow-up reports with a
+        # partial `print` block, and filling the whole thing from those would
+        # report UNKNOWN with zero layers and zero degrees as a real status --
+        # and end the wait loop on it.
+        if p and p.get("gcode_state") is not None:
             status_data = {
-                "state": p.get("gcode_state", "UNKNOWN"),
+                "state": p["gcode_state"],
                 "progress": p.get("mc_percent", 0),
                 "eta_minutes": p.get("mc_remaining_time", 0),
                 "layer": p.get("layer_num", 0),
@@ -375,17 +418,7 @@ def cmd_status(args):
             on_message=on_message,
         )
         connect_and_wait(mqtt)
-        # Re-send pushall while waiting. MQTTClient._on_connect flips `connected`
-        # to True and only subscribes afterwards, so the first request can leave
-        # before our subscription is live -- the printer answers into the void and
-        # the run reports an unreachable printer.
-        for attempt in range(10):
-            if attempt % 3 == 0:
-                mqtt.request_full_status()
-            time.sleep(0.5)
-            if status_data:
-                break
-
+        wait_for_report(mqtt, lambda: status_data)
         quiet_disconnect(mqtt)
     except Exception as e:
         err_str = str(e).lower()
@@ -505,13 +538,7 @@ def cmd_filaments(args):
             on_message=on_message,
         )
         connect_and_wait(mqtt)
-        mqtt.request_full_status()
-
-        for _ in range(10):
-            time.sleep(0.5)
-            if ams_data:
-                break
-
+        wait_for_report(mqtt, lambda: ams_data)
         quiet_disconnect(mqtt)
     except Exception as e:
         err_str = str(e).lower()

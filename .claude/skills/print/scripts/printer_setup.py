@@ -109,7 +109,7 @@ def cmd_setup(args):
     if sys.stdin.isatty():
         password = getpass.getpass("BambuLab password (hidden): ").strip()
     else:
-        eprint("[setup] stdin is not a terminal; the password will be echoed.")
+        eprint("[setup] stdin is not a terminal; reading the password unhidden.")
         password = input("BambuLab password: ").strip()
 
     if not email or not password:
@@ -125,9 +125,24 @@ def cmd_setup(args):
         )
     except Exception as e:
         err_str = str(e).lower()
-        if "401" in err_str or "unauthorized" in err_str or "invalid" in err_str:
+        # Bambu answers a wrong email or password with HTTP 400 and
+        # {"code":1,"error":"Incorrect account or password."}, and the library
+        # calls raise_for_status() before reading that body, so the only thing
+        # reaching us is "400 Client Error". Without 400 and "incorrect account"
+        # in this filter, the most common setup mistake is reported as a network
+        # problem. Note that an account created through Google or Apple sign-in
+        # has no password at all and lands here too.
+        if (
+            "401" in err_str
+            or "400" in err_str
+            or "unauthorized" in err_str
+            or "invalid" in err_str
+            or "incorrect account" in err_str
+        ):
             output_error(
-                "Authentication failed. Check your email and password.",
+                "Authentication failed. Check your email and password. An account "
+                "created through Google or Apple sign-in has no password -- set one "
+                "first via 'Forgot password' on bambulab.com.",
                 reauth=True,
             )
         else:
