@@ -14,6 +14,7 @@ import argparse
 import getpass
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -134,12 +135,18 @@ def cmd_setup(args):
         # memory address in a urllib3 connection error, turning a network outage
         # into "check your password". Note that an account created through Google or Apple sign-in
         # has no password at all and lands here too.
+        # Match on the status code, not on loose words in the message. A bare
+        # "invalid" also catches a mangled response from a captive portal, which
+        # is a network problem being reported as a wrong password -- the same
+        # confusion as the bare "400" that matched a urllib3 memory address.
+        # 403 belongs here too: a locked or rate-limited account is an account
+        # problem, and was reported as a network failure.
         if (
-            "401" in err_str
-            or "400 client error" in err_str
+            re.search(r"\b(400|401|403)\b\s*client error", err_str)
             or "unauthorized" in err_str
-            or "invalid" in err_str
+            or "forbidden" in err_str
             or "incorrect account" in err_str
+            or re.search(r"invalid (?:account|password|credential|email)", err_str)
         ):
             output_error(
                 "Authentication failed. Check your email and password. An account "

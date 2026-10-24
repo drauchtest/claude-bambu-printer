@@ -74,7 +74,7 @@ def check_token_age(config: dict) -> str | None:
         created = datetime.fromisoformat(token_created)
         age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
         if age_hours > TOKEN_WARNING_HOURS:
-            return f"Token is {age_hours:.0f}h old (limit ~24h). Run printer_setup.py setup to re-authenticate if you get auth errors."
+            return f"Token is {age_hours:.0f}h old (warning threshold {TOKEN_WARNING_HOURS}h, not a measured expiry). Run printer_setup.py setup if you get auth errors."
     except (ValueError, TypeError):
         return "Could not parse token timestamp."
     return None
@@ -133,9 +133,10 @@ def connect_and_wait(mqtt_client, timeout: float = 15.0):
     was about to succeed.
 
     MQTTClient does not keep the CONNACK reason code, so wrap its callback to
-    record it. Without that, an expired token -- the daily case, the token lives
-    about 24h -- just times out after `timeout` seconds and reports the wrong
-    cause, while paho silently retries "not authorized" in the background.
+    record it. Without that, a rejected token just times out after `timeout`
+    seconds and reports the wrong cause, while paho silently retries "not
+    authorized" in the background. How long a token actually lives is unmeasured:
+    the warning threshold is 24h, but one 25h old still worked.
     """
     inner = mqtt_client._on_connect
 
@@ -573,7 +574,14 @@ def cmd_filaments(args):
 
     result = {"status": "ok", "filaments": filaments}
     if not filaments:
-        result["message"] = "No filaments detected. AMS may not be connected or no filaments loaded."
+        # Do not throw away what the printer just told us: the report says
+        # whether an AMS is present, so stop offering "maybe not connected" as a
+        # guess when the same message already answered it.
+        if ams_data.get("ams"):
+            result["message"] = ("AMS is connected but reports no loaded tray. "
+                                 "Filament fed directly from a spool is not visible here.")
+        else:
+            result["message"] = "No AMS reported by the printer, so no filament slots to read."
     if token_warning:
         result["token_warning"] = token_warning
     output_json(result)
