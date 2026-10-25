@@ -24,6 +24,11 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _interpreter  # noqa: E402  -- has to run before bambulab is imported
+
+_interpreter.ensure()
+
 CONFIG_PATH = os.path.expanduser("~/.claude/bambu-config.json")
 
 # BambuStudio CLI paths to search (macOS)
