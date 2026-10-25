@@ -27,10 +27,10 @@ GUARD = "BAMBU_SKILL_REEXEC"
 
 
 def _lees_pointer():
-    # utf-8-sig, niet utf-8: PowerShell 5.1 schrijft met `Set-Content -Encoding utf8`
-    # een BOM, en Kladblok doet dat ook. Met gewone utf-8 begint het pad dan met een
-    # onzichtbaar ﻿, bestaat het bestand "niet", en valt de hele re-exec stil
-    # zonder foutmelding. Precies hoe deze shim bij de eerste test faalde.
+    # utf-8-sig, not utf-8: PowerShell 5.1 writes a BOM with `Set-Content
+    # -Encoding utf8`, and so does Notepad. Read as plain utf-8 the path then
+    # starts with an invisible ﻿, the file "does not exist", and the whole
+    # re-exec falls through silently. That is exactly how this shim first failed.
     try:
         with open(POINTER, encoding="utf-8-sig") as f:
             for regel in f:
@@ -55,13 +55,21 @@ def ensure(module="bambulab"):
         pass
 
     if os.environ.get(GUARD):
-        # Al een keer gewisseld en de module is er nog niet. Doorgaan en de
-        # normale foutmelding van het script laten staan; een tweede wissel zou
-        # alleen de echte oorzaak verbergen.
+        # Already switched once and the module is still missing. Carry on and let
+        # the script's own error stand; switching again would only hide the real
+        # cause.
         return
 
     doel = _lees_pointer()
     if not doel or not os.path.isfile(doel):
+        # One line to stderr, not a silent fallback. Without it a broken install
+        # looks identical to a machine that never needed this shim, and the
+        # script's own "pip install bambu-lab-cloud-api" then points at the wrong
+        # interpreter. Execution continues; this is a hint, not a failure.
+        wat = "is missing" if not doel else f"points at something that does not exist: {doel}"
+        print(f"[skill] {module} not available here, and {POINTER} {wat}. "
+              f"Point that file at an interpreter that has it, or install it "
+              f"into {sys.executable}.", file=sys.stderr)
         return
     if os.path.normcase(doel) == os.path.normcase(sys.executable):
         return
@@ -72,10 +80,10 @@ def ensure(module="bambulab"):
     print(f"[skill] switching to {doel} (this interpreter lacks {module})",
           file=sys.stderr)
 
-    # subprocess, niet os.execve: op Windows vervangt execve het proces zo dat de
-    # uitvoer van het kind door een pipe heen verdwijnt - de eerste versie van deze
-    # shim schakelde zichtbaar en leverde daarna niets op. Hier wordt de exitcode
-    # doorgegeven, zodat `reauth`-afhandeling in de skill blijft werken.
+    # subprocess, not os.execve: on Windows execve replaces the process in a way
+    # that loses the child's output through a pipe -- the first version of this
+    # shim announced the switch and then printed nothing. The exit code is passed
+    # through, so the skill's `reauth` handling keeps working.
     import subprocess
     try:
         resultaat = subprocess.run(argumenten, env=omgeving)
