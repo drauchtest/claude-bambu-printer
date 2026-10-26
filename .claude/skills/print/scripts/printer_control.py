@@ -682,9 +682,23 @@ if __name__ == "__main__":
             import importlib
             importlib.import_module("bambulab")
         except ImportError:
-            output_error(
-                "bambu-lab-cloud-api not installed.",
-                fix="Run: pip install bambu-lab-cloud-api",
-            )
+            # The fix depends on whether an interpreter pointer exists. Without
+            # that distinction this said "pip install bambu-lab-cloud-api" even
+            # when the library was installed in another interpreter -- advice that
+            # installs into the wrong Python, which is the exact failure this
+            # skill hit on Windows.
+            if _interpreter.pointer_pad():
+                output_error(
+                    "bambu-lab-cloud-api not importable, and the interpreter in "
+                    + _interpreter.POINTER + " does not have it either.",
+                    fix="Point " + _interpreter.POINTER + " at an interpreter that "
+                        "has bambu-lab-cloud-api, or install it into that one.",
+                )
+            else:
+                output_error(
+                    "bambu-lab-cloud-api not installed for " + sys.executable + ".",
+                    fix="Either install it there, or create " + _interpreter.POINTER
+                        + " containing the full path to an interpreter that has it.",
+                )
 
     main()

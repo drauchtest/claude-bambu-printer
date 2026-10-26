@@ -42,6 +42,18 @@ def _lees_pointer():
     return None
 
 
+def pointer_pad():
+    """The interpreter the pointer file names, or None.
+
+    Exposed so callers can tell "no pointer at all" from "a pointer that points
+    at an interpreter which also lacks the library" -- those need different
+    advice, and conflating them is how the skill ended up telling people to
+    install into the interpreter that was already known to be wrong.
+    """
+    doel = _lees_pointer()
+    return doel if doel and os.path.isfile(doel) else None
+
+
 def ensure(module="bambulab"):
     """Re-exec this script under the pointed-to interpreter if `module` is missing.
 
