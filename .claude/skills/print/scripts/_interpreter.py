@@ -29,7 +29,7 @@ GUARD = "BAMBU_SKILL_REEXEC"
 def _lees_pointer():
     # utf-8-sig, not utf-8: PowerShell 5.1 writes a BOM with `Set-Content
     # -Encoding utf8`, and so does Notepad. Read as plain utf-8 the path then
-    # starts with an invisible ﻿, the file "does not exist", and the whole
+    # starts with an invisible \ufeff, the file "does not exist", and the whole
     # re-exec falls through silently. That is exactly how this shim first failed.
     try:
         with open(POINTER, encoding="utf-8-sig") as f:
